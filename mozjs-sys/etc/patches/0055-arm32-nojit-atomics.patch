@@ -1,0 +1,27 @@
+SpiderMonkey on 32-bit ARM with --disable-jit: AtomicOperations-shared-jit.cpp includes jit/arm/Architecture-arm.h
+for ARMFlags, which clashes with jit/none's Architecture-none.h in the unified build (and ARMFlags is only
+initialised by the ARM JIT). Without the ARM code generator, assume alignment faults (the safe answer).
+
+--- a/js/src/jit/shared/AtomicOperations-shared-jit.cpp
++++ b/js/src/jit/shared/AtomicOperations-shared-jit.cpp
+@@ -16,7 +16,7 @@
+ #include "jit/AtomicOperations.h"
+ #include "js/GCAPI.h"
+ 
+-#if defined(__arm__)
++#if defined(__arm__) && defined(JS_CODEGEN_ARM)
+ #  include "jit/arm/Architecture-arm.h"
+ #endif
+ 
+@@ -61,7 +61,11 @@
+ #  if defined(__x86_64__) || defined(__i386__)
+   return true;
+ #  elif defined(__arm__)
++#    if defined(JS_CODEGEN_ARM)
+   return !ARMFlags::HasAlignmentFault();
++#    else
++  return false;  // no ARM JIT, so no CPU flags: assume alignment faults
++#    endif
+ #  elif defined(__aarch64__)
+   // This is not necessarily true but it's the best guess right now.
+   return true;
