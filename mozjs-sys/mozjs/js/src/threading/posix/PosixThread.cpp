@@ -9,6 +9,9 @@
 
 #include "js/Utility.h"
 #include "threading/posix/ThreadPlatformData.h"
+#ifdef __symbian__
+#  include "mozilla/SymbianOS.h"
+#endif
 #include "threading/Thread.h"
 
 namespace js {
@@ -52,7 +55,13 @@ bool Thread::create(void* (*aMain)(void*), void* aArg) {
     MOZ_RELEASE_ASSERT(!r);
   }
 
+#ifdef __symbian__
+  // NeoSymbian: the thread gets a cleanup stack first (P.I.P.S. needs one)
+  r = MozSymbianPthreadCreate(&id_.platformData()->ptThread, &attrs, aMain,
+                              aArg);
+#else
   r = pthread_create(&id_.platformData()->ptThread, &attrs, aMain, aArg);
+#endif
   if (r) {
     // On either Windows or POSIX we can't be sure if id_ was initialised. So
     // reset it manually.
@@ -113,6 +122,9 @@ void ThisThread::SetName(const char* name) {
   rv = 0;
 #elif defined(__NetBSD__)
   rv = pthread_setname_np(pthread_self(), "%s", (void*)name);
+#elif defined(__symbian__)
+  (void)name;  // NeoSymbian: P.I.P.S. threads have no names to set
+  rv = 0;
 #else
   rv = pthread_setname_np(pthread_self(), name);
 #endif

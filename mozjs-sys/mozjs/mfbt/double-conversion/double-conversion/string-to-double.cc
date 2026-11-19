@@ -52,9 +52,15 @@ namespace double_conversion {
 namespace {
 
 inline char ToLower(char ch) {
+#ifdef __symbian__
+  // NeoSymbian: the classic locale's tolower is ASCII; libstdc++'s locale
+  // machinery is not linked there
+  return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
+#else
   static const std::ctype<char>& cType =
       std::use_facet<std::ctype<char> >(std::locale::classic());
   return cType.tolower(ch);
+#endif
 }
 
 inline char Pass(char ch) {

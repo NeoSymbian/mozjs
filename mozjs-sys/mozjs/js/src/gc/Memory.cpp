@@ -1089,8 +1089,8 @@ size_t GetPageFaultCount() {
     return 0;
   }
   return pmc.PageFaultCount;
-#elif defined(__wasi__)
-  return 0;
+#elif defined(__wasi__) || defined(__symbian__)
+  return 0;  // NeoSymbian: EKA2 gives user code no page-fault count
 #else
   struct rusage usage;
   int err = getrusage(RUSAGE_SELF, &usage);

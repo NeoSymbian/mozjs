@@ -29,7 +29,9 @@
 
 #ifdef XP_WIN
 #  include "mozilla/StackWalk_windows.h"
-#elif defined(__wasi__)
+// NeoSymbian: interpreter only (JS_CODEGEN_NONE); as WASI without wasm32,
+// executable memory is never reserved
+#elif defined(__wasi__) || defined(__symbian__)
 #  if defined(JS_CODEGEN_WASM32)
 #    include <cstdlib>
 #  else
@@ -392,7 +394,7 @@ static void DecommitPages(void* addr, size_t bytes) {
     MOZ_CRASH("DecommitPages failed");
   }
 }
-#elif defined(__wasi__)
+#elif defined(__wasi__) || defined(__symbian__)
 #  if defined(JS_CODEGEN_WASM32)
 static void* ReserveProcessExecutableMemory(size_t bytes) {
   return malloc(bytes);
@@ -844,7 +846,7 @@ void* ProcessExecutableMemory::allocate(size_t bytes,
     return nullptr;
   }
 
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(__symbian__)
   gc::RecordMemoryAlloc(bytes);
 #endif
 
@@ -871,7 +873,7 @@ void ProcessExecutableMemory::deallocate(void* addr, size_t bytes,
   MOZ_MAKE_MEM_NOACCESS(addr, bytes);
   if (decommit) {
     DecommitPages(addr, bytes);
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(__symbian__)
     gc::RecordMemoryFree(bytes);
 #endif
   }
@@ -966,7 +968,7 @@ bool js::jit::ReprotectRegion(void* start, size_t size,
   // We use the C++ fence here -- and not AtomicOperations::fenceSeqCst() --
   // primarily because ReprotectRegion will be called while we construct our own
   // jitted atomics.  But the C++ fence is sufficient and correct, too.
-#ifdef __wasi__
+#if defined(__wasi__) || defined(__symbian__)
   MOZ_CRASH("NYI FOR WASI.");
 #else
   std::atomic_thread_fence(std::memory_order_seq_cst);

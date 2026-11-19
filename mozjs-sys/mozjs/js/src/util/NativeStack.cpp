@@ -10,6 +10,8 @@
 #  include "util/WindowsWrapper.h"
 #elif defined(__wasi__)
 // Nothing
+#elif defined(__symbian__)
+#  include "mozilla/SymbianOS.h"
 #elif defined(XP_DARWIN) || defined(DARWIN) || defined(XP_UNIX)
 #  include <pthread.h>
 #  if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
@@ -112,6 +114,15 @@ void* js::GetNativeStackBaseImpl() {
 #  else
   return static_cast<char*>(stackBase) + stackSize;
 #  endif
+}
+
+#elif defined(__symbian__)
+
+// NeoSymbian: the kernel knows every thread's stack (RThread::StackInfo),
+// the main thread's and P.I.P.S. threads' alike
+void* js::GetNativeStackBaseImpl() {
+  MOZ_ASSERT(JS_STACK_GROWTH_DIRECTION < 0);
+  return MozSymbianStackBase();
 }
 
 #elif defined(__wasi__)

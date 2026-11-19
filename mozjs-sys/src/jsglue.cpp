@@ -1003,6 +1003,8 @@ void DeleteRootedObjectVector(JS::PersistentRootedObjectVector* v) { delete v; }
 // nothing needed here
 #elif defined(_MSC_VER)
 // nothing needed here
+#elif defined(__symbian__)
+#  include "mozilla/SymbianOS.h"  // NeoSymbian: the heap's cell length
 #else
 #  error "unsupported platform"
 #endif
@@ -1023,6 +1025,8 @@ static size_t MallocSizeOf(const void* aPtr) {
   return _msize((void*)aPtr);
 #elif defined(_MSC_VER)
   return _msize((void*)aPtr);
+#elif defined(__symbian__)
+  return MozSymbianMallocUsableSize(aPtr);
 #else
 #  error "unsupported platform"
 #endif

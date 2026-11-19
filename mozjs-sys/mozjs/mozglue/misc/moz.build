@@ -32,6 +32,11 @@ EXPORTS.mozilla.glue += [
     "WinUtils.h",
 ]
 
+if CONFIG["OS_ARCH"] == "Symbian":
+    # NeoSymbian: the stack, random numbers and threads from EKA2 (the e32 headers stay in this file)
+    EXPORTS.mozilla += ["SymbianOS.h"]
+    SOURCES += ["SymbianOS.cpp"]
+
 if CONFIG["OS_ARCH"] == "WINNT":
     EXPORTS.mozilla += [
         "GetKnownFolderPath.h",
