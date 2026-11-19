@@ -4,8 +4,15 @@
 
 #include "mozilla/SymbianOS.h"
 
+// default visibility: Mozilla builds with hidden visibility, and a hidden
+// reference cannot bind to euser's exports
+#pragma GCC visibility push(default)
 #include <e32base.h>
+#include <e32debug.h>
 #include <e32math.h>
+#pragma GCC visibility pop
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,6 +33,15 @@ void MozSymbianRandom(void* aBuffer, size_t aLength) {
     out += n;
     aLength -= n;
   }
+}
+
+void MozSymbianLog(const char* aFormat, ...) {
+  char line[200];  // the debug port faults on more than 256 bytes at once
+  va_list ap;
+  va_start(ap, aFormat);
+  vsnprintf(line, sizeof line, aFormat, ap);
+  va_end(ap);
+  RDebug::Printf("%s", line);
 }
 
 size_t MozSymbianMallocUsableSize(const void* aPtr) {

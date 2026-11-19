@@ -536,9 +536,11 @@ fn symbian_sdk_bin() -> Option<PathBuf> {
     if !env::var("TARGET").unwrap().contains("symbian") {
         return None;
     }
-    let sdk = env::var_os("NEOSYMBIAN_SDK").map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env::var_os("HOME").expect("HOME")).join(".local/share/neosymbian-sdk")
-    });
+    let sdk = env::var_os("NEOSYMBIAN_SDK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var_os("HOME").expect("HOME")).join(".local/share/neosymbian-sdk")
+        });
     Some(sdk.join("bin"))
 }
 

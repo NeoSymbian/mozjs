@@ -18,6 +18,11 @@ MFBT_API void* MozSymbianStackBase(void);
 // `aLength` random bytes from the kernel's secure generator (Math::Random).
 MFBT_API void MozSymbianRandom(void* aBuffer, size_t aLength);
 
+// A line on the debug port (the serial log), printf-style: what C's stderr
+// shows elsewhere (P.I.P.S.'s stderr does not reach the serial log).
+MFBT_API void MozSymbianLog(const char* aFormat, ...)
+    __attribute__((format(printf, 1, 2)));
+
 // The usable size of a malloc'd block: P.I.P.S.'s malloc is the EXE's heap
 // (User::Alloc), so its cells' length (User::AllocLen).
 MFBT_API size_t MozSymbianMallocUsableSize(const void* aPtr);

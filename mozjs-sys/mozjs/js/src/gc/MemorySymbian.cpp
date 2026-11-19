@@ -6,7 +6,11 @@
 
 #include "gc/MemorySymbian.h"
 
+// default visibility: Mozilla builds with hidden visibility, and a hidden reference cannot bind to euser's exports
+#pragma GCC visibility push(default)
+#include <e32debug.h>
 #include <e32std.h>
+#pragma GCC visibility pop
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -44,7 +48,11 @@ bool Reserve() {
   static const size_t kSizes[] = {1024u << 20, 512u << 20, 256u << 20,
                                   128u << 20};
   for (size_t size : kSizes) {
-    if (gChunk.CreateDisconnectedLocal(0, 0, TInt(size)) == KErrNone) {
+    TInt r = gChunk.CreateDisconnectedLocal(0, 0, TInt(size));
+    if (r != KErrNone) {
+      RDebug::Printf("js gc: no %d MiB chunk (%d)", TInt(size >> 20), r);
+    }
+    if (r == KErrNone) {
       gPages = size / kPage;
       gUsed = static_cast<uint32_t*>(calloc(gPages / 32, sizeof(uint32_t)));
       if (!gUsed) {
@@ -53,6 +61,7 @@ bool Reserve() {
       }
       gBase = reinterpret_cast<uintptr_t>(gChunk.Base());
       gReady = true;
+      RDebug::Printf("js gc: %d MiB reserved at %08x", TInt(size >> 20), TUint(gBase));
       return true;
     }
   }
@@ -90,11 +99,15 @@ void* MapAligned(size_t aLength, size_t aAlignment) {
     if (page == gPages) {
       page = Find(count, aAlignment, 0);
     }
-    if (page < gPages &&
-        gChunk.Commit(TInt(page * kPage), TInt(aLength)) == KErrNone) {
+    TInt r = page < gPages ? gChunk.Commit(TInt(page * kPage), TInt(aLength))
+                           : KErrNoMemory;
+    if (r == KErrNone) {
       Mark(page, count, true);
       gHint = page + count;
       result = reinterpret_cast<void*>(gBase + page * kPage);
+    } else {
+      RDebug::Printf("js gc: map %d KiB (align %d KiB) failed (%d)",
+                     TInt(aLength >> 10), TInt(aAlignment >> 10), r);
     }
   }
   pthread_mutex_unlock(&gLock);
