@@ -1,0 +1,1004 @@
+SpiderMonkey on NeoSymbian (armv7a-symbian-eabi: EKA2 at AArch32 EL0 with P.I.P.S.), interpreter only, no Intl
+(NeoSymbian/browser WB3, docs browser-js.md): a mozbuild OS "Symbian" (__symbian__), GC chunks in a disconnected
+RChunk (gc/MemorySymbian), mozglue/misc/SymbianOS (stack, random, threads, logging), and P.I.P.S. gaps
+(no pthread_rwlock, condattr_setclock, unsetenv's result, locale). Every change is behind __symbian__ or
+OS_ARCH == "Symbian".
+
+diff --git a/build/moz.configure/init.configure b/build/moz.configure/init.configure
+index 63049b66..570e81ad 100644
+--- a/build/moz.configure/init.configure
++++ b/build/moz.configure/init.configure
+@@ -529,6 +529,9 @@ def split_triplet(triplet, allow_wasi=False):
+         canonical_os = canonical_kernel = "SunOS"
+     elif os.startswith("wasi") and allow_wasi:
+         canonical_os = canonical_kernel = "WASI"
++    elif os.startswith("symbian"):
++        # NeoSymbian: EKA2 at AArch32 EL0, P.I.P.S. (Open C) for POSIX; armv7a-symbian-eabi in Rust
++        canonical_os = canonical_kernel = "Symbian"
+     else:
+         raise ValueError("Unknown OS: %s" % os)
+ 
+diff --git a/js/src/builtin/TestingFunctions.cpp b/js/src/builtin/TestingFunctions.cpp
+index 643600e1..23a1e513 100644
+--- a/js/src/builtin/TestingFunctions.cpp
++++ b/js/src/builtin/TestingFunctions.cpp
+@@ -8877,6 +8877,9 @@ static bool SetTimeZone(JSContext* cx, unsigned argc, Value* vp) {
+   auto unsetTimeZone = []() {
+ #  if defined(_WIN32)
+     return _putenv_s("TZ", "") == 0;
++#  elif defined(__symbian__)
++    unsetenv("TZ");  // NeoSymbian: P.I.P.S.'s unsetenv returns nothing
++    return true;
+ #  else
+     return unsetenv("TZ") == 0;
+ #  endif /* _WIN32 */
+diff --git a/js/src/gc/Memory.cpp b/js/src/gc/Memory.cpp
+index 76dad232..3d22a5e0 100644
+--- a/js/src/gc/Memory.cpp
++++ b/js/src/gc/Memory.cpp
+@@ -35,7 +35,9 @@
+ #    include <sys/syscall.h>
+ #  endif
+ 
+-#  if !defined(__wasi__)
++#  if defined(__symbian__)
++#    include "gc/MemorySymbian.h"
++#  elif !defined(__wasi__)
+ #    include <sys/mman.h>
+ #    include <sys/resource.h>
+ #    include <sys/stat.h>
+@@ -174,7 +176,7 @@ enum class PageAccess : DWORD {
+   ReadExecute = PAGE_EXECUTE_READ,
+   ReadWriteExecute = PAGE_EXECUTE_READWRITE,
+ };
+-#elif defined(__wasi__)
++#elif defined(__wasi__) || defined(__symbian__)
+ enum class PageAccess : int {
+   None = 0,
+   Read = 0,
+@@ -198,7 +200,7 @@ template <bool AlwaysGetNew = true>
+ static bool TryToAlignChunk(void** aRegion, void** aRetainedRegion,
+                             size_t length, size_t alignment);
+ 
+-#ifndef __wasi__
++#if !defined(__wasi__) && !defined(__symbian__)
+ static void* MapAlignedPagesSlow(size_t length, size_t alignment);
+ #endif  // wasi
+ static void* MapAlignedPagesLastDitch(size_t length, size_t alignment,
+@@ -250,6 +252,9 @@ static inline void* MapInternal(void* desired, size_t length) {
+   if (region) {
+     memset(region, 0, length);
+   }
++#elif defined(__symbian__)
++  // NeoSymbian: committed, zeroed pages (no address hints: desired is ignored)
++  region = gc::symbian::MapAligned(length, gc::SystemPageSize());
+ #else
+   int flags = MAP_PRIVATE | MAP_ANON;
+   region = MozTaggedAnonymousMmap(desired, length, int(PageAccess::ReadWrite),
+@@ -269,6 +274,8 @@ static inline void UnmapInternal(void* region, size_t length) {
+   MOZ_RELEASE_ASSERT(VirtualFree(region, 0, MEM_RELEASE) != 0);
+ #elif defined(__wasi__)
+   free(region);
++#elif defined(__symbian__)
++  gc::symbian::Unmap(region, length);
+ #else
+   if (munmap(region, length)) {
+     MOZ_RELEASE_ASSERT(errno == ENOMEM);
+@@ -579,7 +586,14 @@ void* MapAlignedPages(size_t length, size_t alignment,
+     alignment = allocGranularity;
+   }
+ 
+-#ifdef __wasi__
++#if defined(__symbian__)
++  // NeoSymbian: aligned pages straight from the chunk (MemorySymbian.cpp)
++  void* region = gc::symbian::MapAligned(length, alignment);
++  if (region) {
++    RecordMemoryAlloc(length);  // UnmapPages records the free
++  }
++  return region;
++#elif defined(__wasi__)
+   void* region = nullptr;
+   if (int err = posix_memalign(&region, alignment, length)) {
+     MOZ_ASSERT(err == ENOMEM);
+@@ -761,7 +775,7 @@ static void* MapAlignedPagesRandom(size_t length, size_t alignment) {
+ 
+ #endif  // defined(JS_64BIT)
+ 
+-#ifndef __wasi__
++#if !defined(__wasi__) && !defined(__symbian__)
+ static void* MapAlignedPagesSlow(size_t length, size_t alignment) {
+   void* alignedRegion = nullptr;
+   do {
+@@ -998,6 +1012,10 @@ bool MarkPagesUnusedSoft(void* region, size_t length) {
+                       DWORD(PageAccess::ReadWrite)) == region;
+ #elif defined(__wasi__)
+   return 0;
++#elif defined(__symbian__)
++  // NeoSymbian: a decommitted page faults (no soft, still-readable state as
++  // madvise gives), so the soft path declines; MarkPagesUnusedHard decommits
++  return false;
+ #else
+   int status;
+   do {
+@@ -1027,6 +1045,8 @@ bool MarkPagesUnusedHard(void* region, size_t length) {
+ 
+ #if defined(XP_WIN)
+   return VirtualFree(region, length, MEM_DECOMMIT);
++#elif defined(__symbian__)
++  return gc::symbian::Decommit(region, length);
+ #else
+   return MarkPagesUnusedSoft(region, length);
+ #endif
+@@ -1055,6 +1075,8 @@ bool MarkPagesInUseHard(void* region, size_t length) {
+ #if defined(XP_WIN)
+   return VirtualAlloc(region, length, MEM_COMMIT,
+                       DWORD(PageAccess::ReadWrite)) == region;
++#elif defined(__symbian__)
++  return gc::symbian::Commit(region, length);
+ #else
+   return true;
+ #endif
+@@ -1067,8 +1089,8 @@ size_t GetPageFaultCount() {
+     return 0;
+   }
+   return pmc.PageFaultCount;
+-#elif defined(__wasi__)
+-  return 0;
++#elif defined(__wasi__) || defined(__symbian__)
++  return 0;  // NeoSymbian: EKA2 gives user code no page-fault count
+ #else
+   struct rusage usage;
+   int err = getrusage(RUSAGE_SELF, &usage);
+diff --git a/js/src/gc/MemorySymbian.cpp b/js/src/gc/MemorySymbian.cpp
+new file mode 100644
+index 00000000..76ac3669
+--- /dev/null
++++ b/js/src/gc/MemorySymbian.cpp
+@@ -0,0 +1,144 @@
++/* SPDX-License-Identifier: Apache-2.0
++ * NeoSymbian: the GC's pages from one disconnected EKA2 chunk (MemorySymbian.h; docs browser-js.md). The chunk
++ * reserves the largest of 1 GiB, 512, 256 and 128 MiB the process can get (its local data area is about 2 GiB); a
++ * bitmap of 4 KiB pages records which belong to a mapping. Mapping commits, unmapping decommits: committed memory
++ * is real RAM, decommitted pages fault and cost nothing. */
++
++#include "gc/MemorySymbian.h"
++
++// default visibility: Mozilla builds with hidden visibility, and a hidden reference cannot bind to euser's exports
++#pragma GCC visibility push(default)
++#include <e32debug.h>
++#include <e32std.h>
++#pragma GCC visibility pop
++#include <pthread.h>
++#include <stdint.h>
++#include <stdlib.h>
++
++namespace js::gc::symbian {
++
++namespace {
++
++const size_t kPage = 4096;
++
++pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
++bool gReady;
++RChunk gChunk;
++uintptr_t gBase;
++size_t gPages;
++uint32_t* gUsed;  // one bit per page: part of a mapping
++size_t gHint;     // where the next search starts (next fit)
++
++bool Used(size_t aPage) { return gUsed[aPage >> 5] & (1u << (aPage & 31)); }
++
++void Mark(size_t aFirst, size_t aCount, bool aUsed) {
++  for (size_t p = aFirst; p < aFirst + aCount; ++p) {
++    if (aUsed) {
++      gUsed[p >> 5] |= 1u << (p & 31);
++    } else {
++      gUsed[p >> 5] &= ~(1u << (p & 31));
++    }
++  }
++}
++
++bool Reserve() {
++  if (gReady) {
++    return true;
++  }
++  static const size_t kSizes[] = {1024u << 20, 512u << 20, 256u << 20,
++                                  128u << 20};
++  for (size_t size : kSizes) {
++    TInt r = gChunk.CreateDisconnectedLocal(0, 0, TInt(size));
++    if (r != KErrNone) {
++      RDebug::Printf("js gc: no %d MiB chunk (%d)", TInt(size >> 20), r);
++    }
++    if (r == KErrNone) {
++      gPages = size / kPage;
++      gUsed = static_cast<uint32_t*>(calloc(gPages / 32, sizeof(uint32_t)));
++      if (!gUsed) {
++        gChunk.Close();
++        return false;
++      }
++      gBase = reinterpret_cast<uintptr_t>(gChunk.Base());
++      gReady = true;
++      RDebug::Printf("js gc: %d MiB reserved at %08x", TInt(size >> 20), TUint(gBase));
++      return true;
++    }
++  }
++  return false;
++}
++
++// a run of `aCount` free pages whose address is `aAlign`-aligned, from `aFrom` on; gPages if none
++size_t Find(size_t aCount, size_t aAlign, size_t aFrom) {
++  size_t step = aAlign / kPage;
++  size_t misalign = (gBase / kPage) % step;
++  size_t p = aFrom + (step - (aFrom + misalign) % step) % step;
++  for (; p + aCount <= gPages; p += step) {
++    size_t q = p;
++    while (q < p + aCount && !Used(q)) {
++      ++q;
++    }
++    if (q == p + aCount) {
++      return p;
++    }
++  }
++  return gPages;
++}
++
++}  // namespace
++
++void* MapAligned(size_t aLength, size_t aAlignment) {
++  if (aAlignment < kPage) {
++    aAlignment = kPage;
++  }
++  pthread_mutex_lock(&gLock);
++  void* result = nullptr;
++  if (Reserve()) {
++    size_t count = aLength / kPage;
++    size_t page = Find(count, aAlignment, gHint);
++    if (page == gPages) {
++      page = Find(count, aAlignment, 0);
++    }
++    TInt r = page < gPages ? gChunk.Commit(TInt(page * kPage), TInt(aLength))
++                           : KErrNoMemory;
++    if (r == KErrNone) {
++      Mark(page, count, true);
++      gHint = page + count;
++      result = reinterpret_cast<void*>(gBase + page * kPage);
++    } else {
++      RDebug::Printf("js gc: map %d KiB (align %d KiB) failed (%d)",
++                     TInt(aLength >> 10), TInt(aAlignment >> 10), r);
++    }
++  }
++  pthread_mutex_unlock(&gLock);
++  return result;
++}
++
++void Unmap(void* aRegion, size_t aLength) {
++  size_t page = (reinterpret_cast<uintptr_t>(aRegion) - gBase) / kPage;
++  pthread_mutex_lock(&gLock);
++  gChunk.Decommit(TInt(page * kPage), TInt(aLength));  // pages already decommitted are fine
++  Mark(page, aLength / kPage, false);
++  if (page < gHint) {
++    gHint = page;
++  }
++  pthread_mutex_unlock(&gLock);
++}
++
++bool Decommit(void* aRegion, size_t aLength) {
++  TInt offset = TInt(reinterpret_cast<uintptr_t>(aRegion) - gBase);
++  pthread_mutex_lock(&gLock);
++  TInt r = gChunk.Decommit(offset, TInt(aLength));
++  pthread_mutex_unlock(&gLock);
++  return r == KErrNone;
++}
++
++bool Commit(void* aRegion, size_t aLength) {
++  TInt offset = TInt(reinterpret_cast<uintptr_t>(aRegion) - gBase);
++  pthread_mutex_lock(&gLock);
++  TInt r = gChunk.Commit(offset, TInt(aLength));
++  pthread_mutex_unlock(&gLock);
++  return r == KErrNone;
++}
++
++}  // namespace js::gc::symbian
+diff --git a/js/src/gc/MemorySymbian.h b/js/src/gc/MemorySymbian.h
+new file mode 100644
+index 00000000..6a1d4178
+--- /dev/null
++++ b/js/src/gc/MemorySymbian.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: Apache-2.0
++ * NeoSymbian: the GC's pages from one disconnected EKA2 chunk (MemorySymbian.cpp). P.I.P.S. has no anonymous mmap
++ * and its mprotect does nothing; a disconnected RChunk reserves address space and commits/decommits any page in it,
++ * which is what Memory.cpp needs. No EKA2 types here, so SpiderMonkey's sources never see the e32 headers. */
++
++#ifndef gc_MemorySymbian_h
++#define gc_MemorySymbian_h
++
++#include <stddef.h>
++
++namespace js::gc::symbian {
++
++// Committed (zeroed, read/write) pages: `length` bytes at an `alignment`-aligned address (both multiples of 4 KiB),
++// or null when the reservation is full or memory is out.
++void* MapAligned(size_t length, size_t alignment);
++// Decommit and give back `length` bytes at `region` (any page range of a MapAligned result).
++void Unmap(void* region, size_t length);
++// Decommit pages, which then fault until committed again; their address space stays ours.
++bool Decommit(void* region, size_t length);
++// Commit decommitted pages again (zeroed).
++bool Commit(void* region, size_t length);
++
++}  // namespace js::gc::symbian
++
++#endif  // gc_MemorySymbian_h
+diff --git a/js/src/gc/moz.build b/js/src/gc/moz.build
+index ebe40a7c..b6cc3a1c 100644
+--- a/js/src/gc/moz.build
++++ b/js/src/gc/moz.build
+@@ -62,5 +62,9 @@ SOURCES += [
+     "StoreBuffer.cpp",
+ ]
+ 
++if CONFIG["OS_ARCH"] == "Symbian":
++    # NeoSymbian: the GC's pages from a disconnected EKA2 chunk (the e32 headers stay in this file)
++    SOURCES += ["MemorySymbian.cpp"]
++
+ if CONFIG["FUZZING_JS_FUZZILLI"]:
+     include("/tools/fuzzing/libfuzzer-config.mozbuild")
+diff --git a/js/src/jit/ProcessExecutableMemory.cpp b/js/src/jit/ProcessExecutableMemory.cpp
+index c2028b39..3ac5e495 100644
+--- a/js/src/jit/ProcessExecutableMemory.cpp
++++ b/js/src/jit/ProcessExecutableMemory.cpp
+@@ -29,7 +29,9 @@
+ 
+ #ifdef XP_WIN
+ #  include "mozilla/StackWalk_windows.h"
+-#elif defined(__wasi__)
++// NeoSymbian: interpreter only (JS_CODEGEN_NONE); as WASI without wasm32,
++// executable memory is never reserved
++#elif defined(__wasi__) || defined(__symbian__)
+ #  if defined(JS_CODEGEN_WASM32)
+ #    include <cstdlib>
+ #  else
+@@ -392,7 +394,7 @@ static void DecommitPages(void* addr, size_t bytes) {
+     MOZ_CRASH("DecommitPages failed");
+   }
+ }
+-#elif defined(__wasi__)
++#elif defined(__wasi__) || defined(__symbian__)
+ #  if defined(JS_CODEGEN_WASM32)
+ static void* ReserveProcessExecutableMemory(size_t bytes) {
+   return malloc(bytes);
+@@ -844,7 +846,7 @@ void* ProcessExecutableMemory::allocate(size_t bytes,
+     return nullptr;
+   }
+ 
+-#if !defined(__wasi__)
++#if !defined(__wasi__) && !defined(__symbian__)
+   gc::RecordMemoryAlloc(bytes);
+ #endif
+ 
+@@ -871,7 +873,7 @@ void ProcessExecutableMemory::deallocate(void* addr, size_t bytes,
+   MOZ_MAKE_MEM_NOACCESS(addr, bytes);
+   if (decommit) {
+     DecommitPages(addr, bytes);
+-#if !defined(__wasi__)
++#if !defined(__wasi__) && !defined(__symbian__)
+     gc::RecordMemoryFree(bytes);
+ #endif
+   }
+@@ -966,7 +968,7 @@ bool js::jit::ReprotectRegion(void* start, size_t size,
+   // We use the C++ fence here -- and not AtomicOperations::fenceSeqCst() --
+   // primarily because ReprotectRegion will be called while we construct our own
+   // jitted atomics.  But the C++ fence is sufficient and correct, too.
+-#ifdef __wasi__
++#if defined(__wasi__) || defined(__symbian__)
+   MOZ_CRASH("NYI FOR WASI.");
+ #else
+   std::atomic_thread_fence(std::memory_order_seq_cst);
+diff --git a/js/src/threading/posix/PosixThread.cpp b/js/src/threading/posix/PosixThread.cpp
+index 8340ead4..76dbf077 100644
+--- a/js/src/threading/posix/PosixThread.cpp
++++ b/js/src/threading/posix/PosixThread.cpp
+@@ -9,6 +9,9 @@
+ 
+ #include "js/Utility.h"
+ #include "threading/posix/ThreadPlatformData.h"
++#ifdef __symbian__
++#  include "mozilla/SymbianOS.h"
++#endif
+ #include "threading/Thread.h"
+ 
+ namespace js {
+@@ -52,7 +55,13 @@ bool Thread::create(void* (*aMain)(void*), void* aArg) {
+     MOZ_RELEASE_ASSERT(!r);
+   }
+ 
++#ifdef __symbian__
++  // NeoSymbian: the thread gets a cleanup stack first (P.I.P.S. needs one)
++  r = MozSymbianPthreadCreate(&id_.platformData()->ptThread, &attrs, aMain,
++                              aArg);
++#else
+   r = pthread_create(&id_.platformData()->ptThread, &attrs, aMain, aArg);
++#endif
+   if (r) {
+     // On either Windows or POSIX we can't be sure if id_ was initialised. So
+     // reset it manually.
+@@ -113,6 +122,9 @@ void ThisThread::SetName(const char* name) {
+   rv = 0;
+ #elif defined(__NetBSD__)
+   rv = pthread_setname_np(pthread_self(), "%s", (void*)name);
++#elif defined(__symbian__)
++  (void)name;  // NeoSymbian: P.I.P.S. threads have no names to set
++  rv = 0;
+ #else
+   rv = pthread_setname_np(pthread_self(), name);
+ #endif
+diff --git a/js/src/util/NativeStack.cpp b/js/src/util/NativeStack.cpp
+index ab0f9a1b..9c542975 100644
+--- a/js/src/util/NativeStack.cpp
++++ b/js/src/util/NativeStack.cpp
+@@ -10,6 +10,8 @@
+ #  include "util/WindowsWrapper.h"
+ #elif defined(__wasi__)
+ // Nothing
++#elif defined(__symbian__)
++#  include "mozilla/SymbianOS.h"
+ #elif defined(XP_DARWIN) || defined(DARWIN) || defined(XP_UNIX)
+ #  include <pthread.h>
+ #  if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
+@@ -114,6 +116,15 @@ void* js::GetNativeStackBaseImpl() {
+ #  endif
+ }
+ 
++#elif defined(__symbian__)
++
++// NeoSymbian: the kernel knows every thread's stack (RThread::StackInfo),
++// the main thread's and P.I.P.S. threads' alike
++void* js::GetNativeStackBaseImpl() {
++  MOZ_ASSERT(JS_STACK_GROWTH_DIRECTION < 0);
++  return MozSymbianStackBase();
++}
++
+ #elif defined(__wasi__)
+ 
+ // Since we rearrange the layout for wasi via --stack-first flag for the linker
+diff --git a/js/src/vm/ArrayBufferObject.cpp b/js/src/vm/ArrayBufferObject.cpp
+index bd301b0c..ee7eb810 100644
+--- a/js/src/vm/ArrayBufferObject.cpp
++++ b/js/src/vm/ArrayBufferObject.cpp
+@@ -16,7 +16,7 @@
+ #include <algorithm>  // std::max, std::min
+ #include <memory>     // std::uninitialized_copy_n
+ #include <string.h>
+-#if !defined(XP_WIN) && !defined(__wasi__)
++#if !defined(XP_WIN) && !defined(__wasi__) && !defined(__symbian__)
+ #  include <sys/mman.h>
+ #endif
+ #include <tuple>  // std::tuple
+@@ -212,6 +212,13 @@ void* js::MapBufferMemory(wasm::AddressType t, wasm::PageSize pageSize,
+   }
+   MOZ_ASSERT(data);
+   memset(data, 0, mappedSize);
++#elif defined(__symbian__)
++  // NeoSymbian: committed, zeroed pages from the GC's chunk, as WASI's
++  // posix_memalign (all committed up front)
++  void* data = gc::MapAlignedPages(mappedSize, gc::SystemPageSize());
++  if (!data) {
++    return nullptr;
++  }
+ #else   // !XP_WIN && !__wasi__
+   void* data =
+       MozTaggedAnonymousMmap(nullptr, mappedSize, PROT_NONE,
+@@ -248,7 +255,7 @@ bool js::CommitBufferMemory(void* dataEnd, size_t delta) {
+   if (!VirtualAlloc(dataEnd, delta, MEM_COMMIT, PAGE_READWRITE)) {
+     return false;
+   }
+-#elif defined(__wasi__)
++#elif defined(__wasi__) || defined(__symbian__)
+   // posix_memalign'd memory is already committed
+   return true;
+ #else
+@@ -278,6 +285,9 @@ void js::UnmapBufferMemory(wasm::AddressType t, void* base, size_t mappedSize,
+ #elif defined(__wasi__)
+   free(base);
+   (void)committedSize;
++#elif defined(__symbian__)
++  gc::UnmapPages(base, mappedSize);
++  (void)committedSize;
+ #else
+   munmap(base, mappedSize);
+   gc::RecordMemoryFree(committedSize);
+@@ -1598,7 +1608,7 @@ void WasmArrayRawBuffer::discard(size_t byteOffset, size_t byteLen) {
+   if (!VirtualAlloc(addr, byteLen, MEM_COMMIT, PAGE_READWRITE)) {
+     MOZ_CRASH("wasm discard: decommitted memory but failed to recommit");
+   };
+-#elif defined(__wasi__)
++#elif defined(__wasi__) || defined(__symbian__)
+   memset(addr, 0, byteLen);
+ #else  // !XP_WIN
+   void* data = MozTaggedAnonymousMmap(addr, byteLen, PROT_READ | PROT_WRITE,
+diff --git a/js/src/vm/Initialization.cpp b/js/src/vm/Initialization.cpp
+index 32f135ba..fc924ca8 100644
+--- a/js/src/vm/Initialization.cpp
++++ b/js/src/vm/Initialization.cpp
+@@ -33,6 +33,9 @@
+ #  include "vtune/VTuneWrapper.h"
+ #endif
+ #include "wasm/WasmProcess.h"
++#ifdef __symbian__
++#  include "mozilla/SymbianOS.h"
++#endif
+ 
+ using js::FutexThread;
+ using JS::detail::InitState;
+@@ -218,14 +221,23 @@ JS_PUBLIC_API bool JS::InitSelfHostedCode(JSContext* cx, SelfHostedCache cache,
+   JSRuntime* rt = cx->runtime();
+ 
+   if (!rt->initSelfHostingStencil(cx, cache, writer)) {
++#ifdef __symbian__
++    MozSymbianLog("js InitSelfHostedCode: initSelfHostingStencil failed");
++#endif
+     return false;
+   }
+ 
+   if (!rt->initializeAtoms(cx)) {
++#ifdef __symbian__
++    MozSymbianLog("js InitSelfHostedCode: initializeAtoms failed");
++#endif
+     return false;
+   }
+ 
+   if (!rt->initSelfHostingFromStencil(cx)) {
++#ifdef __symbian__
++    MozSymbianLog("js InitSelfHostedCode: initSelfHostingFromStencil failed");
++#endif
+     return false;
+   }
+ 
+diff --git a/js/src/vm/SelfHosting.cpp b/js/src/vm/SelfHosting.cpp
+index 070a2ff6..f8b7a037 100644
+--- a/js/src/vm/SelfHosting.cpp
++++ b/js/src/vm/SelfHosting.cpp
+@@ -64,6 +64,9 @@
+ #include "vm/Compression.h"
+ #include "vm/DateObject.h"
+ #include "vm/ErrorReporting.h"  // js::MaybePrintAndClearPendingException
++#ifdef __symbian__
++#  include "mozilla/SymbianOS.h"
++#endif
+ #include "vm/Float16.h"
+ #include "vm/FrameIter.h"  // js::ScriptFrameIter
+ #include "vm/GeneratorObject.h"
+@@ -1975,6 +1978,20 @@ class MOZ_STACK_CLASS AutoPrintSelfHostingFrontendContext
+     if (maybeError()) {
+       JS::PrintError(stderr, &*maybeError(), true);
+     }
++#ifdef __symbian__
++    // NeoSymbian: P.I.P.S.'s stderr does not reach the serial log
++    if (hadOutOfMemory() || hadOverRecursed() || hadAllocationOverflow()) {
++      MozSymbianLog("js self-hosting: out of memory %d, over-recursed %d, "
++                    "allocation overflow %d",
++                    hadOutOfMemory(), hadOverRecursed(),
++                    hadAllocationOverflow());
++    }
++    if (maybeError()) {
++      MozSymbianLog("js self-hosting error: %s:%u: %s",
++                    maybeError()->filename.c_str(), maybeError()->lineno,
++                    maybeError()->message().c_str());
++    }
++#endif
+     for (CompileError& error : warnings()) {
+       JS::PrintError(stderr, &error, true);
+     }
+diff --git a/js/src/vm/SharedArrayObject.cpp b/js/src/vm/SharedArrayObject.cpp
+index 01c8763f..b7d4d7ea 100644
+--- a/js/src/vm/SharedArrayObject.cpp
++++ b/js/src/vm/SharedArrayObject.cpp
+@@ -226,7 +226,7 @@ void WasmSharedArrayRawBuffer::discard(size_t byteOffset, size_t byteLen) {
+     MOZ_ASSERT(!result);  // this always "fails" when unlocking unlocked
+                           // memory...which is the only case we care about
+   }
+-#elif defined(__wasi__)
++#elif defined(__wasi__) || defined(__symbian__)
+   AtomicOperations::memsetSafeWhenRacy(addr, 0, byteLen);
+ #else  // !XP_WIN
+   void* data = MozTaggedAnonymousMmap(
+diff --git a/memory/build/Fallback.cpp b/memory/build/Fallback.cpp
+index 5a34dc0e..c97c9326 100644
+--- a/memory/build/Fallback.cpp
++++ b/memory/build/Fallback.cpp
+@@ -9,6 +9,12 @@
+ MOZ_MEMORY_API void* memalign(size_t aAlignment, size_t aSize) {
+ #  ifdef XP_WIN
+   return _aligned_malloc(aSize, aAlignment);
++#  elif defined(__symbian__)
++  // NeoSymbian: P.I.P.S. has no memalign, and its free (User::Free) cannot
++  // take a pointer into a cell, so only malloc's own 8-byte alignment is
++  // offered. The GC's pages and the mapped ArrayBuffers come from
++  // gc/MemorySymbian.cpp instead.
++  return aAlignment <= 8 ? malloc(aSize) : nullptr;
+ #  else
+   void* ret;
+   if (posix_memalign(&ret, aAlignment, aSize) != 0) {
+diff --git a/mfbt/Poison.cpp b/mfbt/Poison.cpp
+index b46c57ff..5bc1813c 100644
+--- a/mfbt/Poison.cpp
++++ b/mfbt/Poison.cpp
+@@ -14,7 +14,7 @@
+ #  include <windows.h>
+ #elif !defined(__OS2__)
+ #  include <unistd.h>
+-#  ifndef __wasi__
++#  if !defined(__wasi__) && !defined(__symbian__)
+ #    include <sys/mman.h>
+ #    ifndef MAP_ANON
+ #      ifdef MAP_ANONYMOUS
+@@ -103,6 +103,25 @@ static bool ProbeRegion(uintptr_t aRegion, uintptr_t aSize) {
+ 
+ static uintptr_t GetDesiredRegionSize() { return 0; }
+ 
++#elif defined(__symbian__)
++
++// NeoSymbian: no user call reserves address space by address, but every address from KUserMemoryLimit (0x90000000)
++// up is supervisor-only on EKA2 (kernel/eka/include/memmodel/epoc/flexible/arm64/mmboot.h): the preferred poison
++// address 0xF0DEAFFF always faults from user code.
++#  define RESERVE_FAILED 0
++
++static void* ReserveRegion(uintptr_t aRegion, uintptr_t aSize) {
++  return RESERVE_FAILED;
++}
++
++static void ReleaseRegion(void* aRegion, uintptr_t aSize) {}
++
++static bool ProbeRegion(uintptr_t aRegion, uintptr_t aSize) {
++  return aRegion >= 0x90000000u;
++}
++
++static uintptr_t GetDesiredRegionSize() { return 4096; }
++
+ #else  // __wasi__
+ 
+ #  include "mozilla/TaggedAnonymousMemory.h"
+diff --git a/mfbt/RandomNum.cpp b/mfbt/RandomNum.cpp
+index 42ce50f6..60603bc0 100644
+--- a/mfbt/RandomNum.cpp
++++ b/mfbt/RandomNum.cpp
+@@ -4,6 +4,10 @@
+ 
+ #include "mozilla/RandomNum.h"
+ 
++#ifdef __symbian__
++#  include "mozilla/SymbianOS.h"
++#endif
++
+ #ifdef XP_UNIX
+ #  include <fcntl.h>
+ #  include <unistd.h>
+@@ -90,6 +94,12 @@ MFBT_API bool GenerateRandomBytesFromOS(void* aBuffer, size_t aLength) {
+ #if defined(XP_WIN)
+   return !!RtlGenRandom(aBuffer, aLength);
+ 
++#elif defined(__symbian__)
++
++  // NeoSymbian: no /dev/urandom; the kernel's secure generator
++  MozSymbianRandom(aBuffer, aLength);
++  return true;
++
+ #elif defined(USE_ARC4RANDOM)  // defined(XP_WIN)
+ 
+   arc4random_buf(aBuffer, aLength);
+diff --git a/mfbt/double-conversion/double-conversion/string-to-double.cc b/mfbt/double-conversion/double-conversion/string-to-double.cc
+index 972956ca..a6f198fd 100644
+--- a/mfbt/double-conversion/double-conversion/string-to-double.cc
++++ b/mfbt/double-conversion/double-conversion/string-to-double.cc
+@@ -52,9 +52,15 @@ namespace double_conversion {
+ namespace {
+ 
+ inline char ToLower(char ch) {
++#ifdef __symbian__
++  // NeoSymbian: the classic locale's tolower is ASCII; libstdc++'s locale
++  // machinery is not linked there
++  return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
++#else
+   static const std::ctype<char>& cType =
+       std::use_facet<std::ctype<char> >(std::locale::classic());
+   return cType.tolower(ch);
++#endif
+ }
+ 
+ inline char Pass(char ch) {
+diff --git a/mozglue/misc/ConditionVariable_posix.cpp b/mozglue/misc/ConditionVariable_posix.cpp
+index 6e25c022..99c82746 100644
+--- a/mozglue/misc/ConditionVariable_posix.cpp
++++ b/mozglue/misc/ConditionVariable_posix.cpp
+@@ -25,7 +25,13 @@ static const long NanoSecPerSec = 1000000000;
+ #ifdef CV_USE_CLOCK_API
+ // The C++ specification defines std::condition_variable::wait_for in terms of
+ // std::chrono::steady_clock, which is closest to CLOCK_MONOTONIC.
++#  ifdef __symbian__
++// NeoSymbian: P.I.P.S. has no pthread_condattr_setclock; its condvars time out
++// against CLOCK_REALTIME (as Rust's std on this target).
++static const clockid_t WhichClock = CLOCK_REALTIME;
++#  else
+ static const clockid_t WhichClock = CLOCK_MONOTONIC;
++#  endif
+ 
+ // While timevaladd is widely available to work with timevals, the newer
+ // timespec structure is largely lacking such conveniences. Thankfully, the
+@@ -59,8 +65,10 @@ mozilla::detail::ConditionVariableImpl::ConditionVariableImpl() {
+   int r0 = pthread_condattr_init(&attr);
+   MOZ_RELEASE_ASSERT(!r0);
+ 
++#  ifndef __symbian__
+   int r1 = pthread_condattr_setclock(&attr, WhichClock);
+   MOZ_RELEASE_ASSERT(!r1);
++#  endif
+ 
+   int r2 = pthread_cond_init(&mCond, &attr);
+   MOZ_RELEASE_ASSERT(!r2);
+diff --git a/mozglue/misc/PlatformRWLock.h b/mozglue/misc/PlatformRWLock.h
+index 1eba08a0..ba22d332 100644
+--- a/mozglue/misc/PlatformRWLock.h
++++ b/mozglue/misc/PlatformRWLock.h
+@@ -34,7 +34,11 @@ class RWLockImpl {
+   void operator=(RWLockImpl&&) = delete;
+   bool operator==(const RWLockImpl& rhs) = delete;
+ 
+-#ifndef XP_WIN
++#if defined(__symbian__)
++  // NeoSymbian's P.I.P.S. has no pthread_rwlock: a mutex (readers exclude
++  // each other too; correct, less concurrent)
++  pthread_mutex_t mRWLock;
++#elif !defined(XP_WIN)
+   pthread_rwlock_t mRWLock;
+ #else
+   // SRWLock is pointer-sized. We declare it in such a fashion here to avoid
+diff --git a/mozglue/misc/RWLock_posix.cpp b/mozglue/misc/RWLock_posix.cpp
+index 92d427ee..6a2e4b49 100644
+--- a/mozglue/misc/RWLock_posix.cpp
++++ b/mozglue/misc/RWLock_posix.cpp
+@@ -13,6 +13,43 @@
+ #include <errno.h>
+ 
+ // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
++#if defined(__symbian__)
++// NeoSymbian: P.I.P.S. has no pthread_rwlock; the lock is one mutex
++// (PlatformRWLock.h).
++mozilla::detail::RWLockImpl::RWLockImpl() {
++  MOZ_RELEASE_ASSERT(pthread_mutex_init(&mRWLock, nullptr) == 0,
++                     "pthread_mutex_init failed");
++}
++
++mozilla::detail::RWLockImpl::~RWLockImpl() {
++  MOZ_RELEASE_ASSERT(pthread_mutex_destroy(&mRWLock) == 0,
++                     "pthread_mutex_destroy failed");
++}
++
++bool mozilla::detail::RWLockImpl::tryReadLock() {
++  int rv = pthread_mutex_trylock(&mRWLock);
++  MOZ_RELEASE_ASSERT(rv == 0 || rv == EBUSY, "pthread_mutex_trylock failed");
++  return rv == 0;
++}
++
++void mozilla::detail::RWLockImpl::readLock() {
++  MOZ_RELEASE_ASSERT(pthread_mutex_lock(&mRWLock) == 0,
++                     "pthread_mutex_lock failed");
++}
++
++void mozilla::detail::RWLockImpl::readUnlock() {
++  MOZ_RELEASE_ASSERT(pthread_mutex_unlock(&mRWLock) == 0,
++                     "pthread_mutex_unlock failed");
++}
++
++bool mozilla::detail::RWLockImpl::tryWriteLock() { return tryReadLock(); }
++
++void mozilla::detail::RWLockImpl::writeLock() { readLock(); }
++
++void mozilla::detail::RWLockImpl::writeUnlock() { readUnlock(); }
++
++#else
++
+ mozilla::detail::RWLockImpl::RWLockImpl() {
+   MOZ_RELEASE_ASSERT(pthread_rwlock_init(&mRWLock, nullptr) == 0,
+                      "pthread_rwlock_init failed");
+@@ -60,3 +97,5 @@ void mozilla::detail::RWLockImpl::writeUnlock() {
+   MOZ_RELEASE_ASSERT(pthread_rwlock_unlock(&mRWLock) == 0,
+                      "pthread_rwlock_unlock failed");
+ }
++
++#endif  // __symbian__
+diff --git a/mozglue/misc/SymbianOS.cpp b/mozglue/misc/SymbianOS.cpp
+new file mode 100644
+index 00000000..e1e34518
+--- /dev/null
++++ b/mozglue/misc/SymbianOS.cpp
+@@ -0,0 +1,87 @@
++/* SPDX-License-Identifier: Apache-2.0
++ * NeoSymbian: EKA2 for SpiderMonkey where P.I.P.S. has nothing (SymbianOS.h): a thread's stack from the kernel, the
++ * kernel's random numbers, and threads with a cleanup stack. */
++
++#include "mozilla/SymbianOS.h"
++
++// default visibility: Mozilla builds with hidden visibility, and a hidden
++// reference cannot bind to euser's exports
++#pragma GCC visibility push(default)
++#include <e32base.h>
++#include <e32debug.h>
++#include <e32math.h>
++#pragma GCC visibility pop
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++void* MozSymbianStackBase(void) {
++  TThreadStackInfo info;
++  if (RThread().StackInfo(info) != KErrNone) {
++    abort();
++  }
++  return reinterpret_cast<void*>(info.iBase);  // iBase: the top; iLimit: the bottom
++}
++
++void MozSymbianRandom(void* aBuffer, size_t aLength) {
++  unsigned char* out = static_cast<unsigned char*>(aBuffer);
++  while (aLength) {
++    TUint32 r = Math::Random();  // the secure generator (WB1: IRQ-timing entropy, SoC seed)
++    size_t n = aLength < sizeof r ? aLength : sizeof r;
++    memcpy(out, &r, n);
++    out += n;
++    aLength -= n;
++  }
++}
++
++void MozSymbianLog(const char* aFormat, ...) {
++  char line[200];  // the debug port faults on more than 256 bytes at once
++  va_list ap;
++  va_start(ap, aFormat);
++  vsnprintf(line, sizeof line, aFormat, ap);
++  va_end(ap);
++  RDebug::Printf("%s", line);
++}
++
++size_t MozSymbianMallocUsableSize(const void* aPtr) {
++  return aPtr ? size_t(User::AllocLen(aPtr)) : 0;
++}
++
++namespace {
++
++struct Start {
++  void* (*mMain)(void*);
++  void* mArg;
++};
++
++void* Trampoline(void* aStart) {
++  Start start = *static_cast<Start*>(aStart);
++  free(aStart);
++  CTrapCleanup* cleanup = CTrapCleanup::New();
++  if (!cleanup) {
++    abort();
++  }
++  void* result = start.mMain(start.mArg);
++  delete cleanup;
++  return result;
++}
++
++}  // namespace
++
++int MozSymbianPthreadCreate(pthread_t* aThread, const pthread_attr_t* aAttr,
++                            void* (*aMain)(void*), void* aArg) {
++  Start* start = static_cast<Start*>(malloc(sizeof(Start)));
++  if (!start) {
++    return 12;  // ENOMEM
++  }
++  start->mMain = aMain;
++  start->mArg = aArg;
++  // P.I.P.S. declares the attributes non-const
++  int r = pthread_create(aThread, const_cast<pthread_attr_t*>(aAttr),
++                         Trampoline, start);
++  if (r) {
++    free(start);
++  }
++  return r;
++}
+diff --git a/mozglue/misc/SymbianOS.h b/mozglue/misc/SymbianOS.h
+new file mode 100644
+index 00000000..2a8fa4f8
+--- /dev/null
++++ b/mozglue/misc/SymbianOS.h
+@@ -0,0 +1,37 @@
++/* SPDX-License-Identifier: Apache-2.0
++ * NeoSymbian: the few EKA2 facts SpiderMonkey needs that P.I.P.S. does not give (SymbianOS.cpp). No EKA2 types here,
++ * so Mozilla's sources never see the e32 headers. */
++
++#ifndef mozilla_SymbianOS_h
++#define mozilla_SymbianOS_h
++
++#include <pthread.h>
++#include <stddef.h>
++
++#include "mozilla/Types.h"
++
++extern "C" {
++
++// The current thread's stack: its highest address (the stack grows down).
++MFBT_API void* MozSymbianStackBase(void);
++
++// `aLength` random bytes from the kernel's secure generator (Math::Random).
++MFBT_API void MozSymbianRandom(void* aBuffer, size_t aLength);
++
++// A line on the debug port (the serial log), printf-style: what C's stderr
++// shows elsewhere (P.I.P.S.'s stderr does not reach the serial log).
++MFBT_API void MozSymbianLog(const char* aFormat, ...)
++    __attribute__((format(printf, 1, 2)));
++
++// The usable size of a malloc'd block: P.I.P.S.'s malloc is the EXE's heap
++// (User::Alloc), so its cells' length (User::AllocLen).
++MFBT_API size_t MozSymbianMallocUsableSize(const void* aPtr);
++
++// pthread_create, with the new thread given a cleanup stack first: P.I.P.S.
++// panics (E32USER-CBase 69) on a thread without one.
++MFBT_API int MozSymbianPthreadCreate(pthread_t* aThread,
++                                     const pthread_attr_t* aAttr,
++                                     void* (*aMain)(void*), void* aArg);
++}
++
++#endif  // mozilla_SymbianOS_h
+diff --git a/mozglue/misc/TimeStamp_posix.cpp b/mozglue/misc/TimeStamp_posix.cpp
+index 9137c18c..038ef85d 100644
+--- a/mozglue/misc/TimeStamp_posix.cpp
++++ b/mozglue/misc/TimeStamp_posix.cpp
+@@ -11,7 +11,9 @@
+ // obtained with this API; see TimeDuration::Resolution;
+ //
+ 
+-#include <sys/syscall.h>
++#if !defined(__symbian__)  // NeoSymbian: no syscall(); used by the Linux code only
++#  include <sys/syscall.h>
++#endif
+ #include <time.h>
+ #include <unistd.h>
+ #include <string.h>
+diff --git a/mozglue/misc/moz.build b/mozglue/misc/moz.build
+index ff861a6e..ef145ce5 100644
+--- a/mozglue/misc/moz.build
++++ b/mozglue/misc/moz.build
+@@ -32,6 +32,11 @@ EXPORTS.mozilla.glue += [
+     "WinUtils.h",
+ ]
+ 
++if CONFIG["OS_ARCH"] == "Symbian":
++    # NeoSymbian: the stack, random numbers and threads from EKA2 (the e32 headers stay in this file)
++    EXPORTS.mozilla += ["SymbianOS.h"]
++    SOURCES += ["SymbianOS.cpp"]
++
+ if CONFIG["OS_ARCH"] == "WINNT":
+     EXPORTS.mozilla += [
+         "GetKnownFolderPath.h",
+diff --git a/python/mozbuild/mozbuild/configure/constants.py b/python/mozbuild/mozbuild/configure/constants.py
+index 4e600040..d5203830 100644
+--- a/python/mozbuild/mozbuild/configure/constants.py
++++ b/python/mozbuild/mozbuild/configure/constants.py
+@@ -43,6 +43,7 @@ class OS(EnumString):
+         "SunOS",
+         "WINNT",
+         "WASI",
++        "Symbian",
+     )
+ 
+ 
+@@ -58,6 +59,7 @@ class Kernel(EnumString):
+         "SunOS",
+         "WINNT",
+         "WASI",
++        "Symbian",
+     )
+ 
+ 
+@@ -147,6 +149,7 @@ kernel_preprocessor_checks = {
+     "SunOS": "__sun__",
+     "WINNT": "_WIN32 || __CYGWIN__",
+     "WASI": "__wasi__",
++    "Symbian": "__symbian__",
+ }
+ 
+ assert sorted(kernel_preprocessor_checks.keys()) == sorted(Kernel.POSSIBLE_VALUES)
