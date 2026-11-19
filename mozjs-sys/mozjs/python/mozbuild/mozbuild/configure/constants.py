@@ -43,6 +43,7 @@ class OS(EnumString):
         "SunOS",
         "WINNT",
         "WASI",
+        "Symbian",
     )
 
 
@@ -58,6 +59,7 @@ class Kernel(EnumString):
         "SunOS",
         "WINNT",
         "WASI",
+        "Symbian",
     )
 
 
@@ -147,6 +149,7 @@ kernel_preprocessor_checks = {
     "SunOS": "__sun__",
     "WINNT": "_WIN32 || __CYGWIN__",
     "WASI": "__wasi__",
+    "Symbian": "__symbian__",
 }
 
 assert sorted(kernel_preprocessor_checks.keys()) == sorted(Kernel.POSSIBLE_VALUES)

@@ -33,6 +33,9 @@
 #  include "vtune/VTuneWrapper.h"
 #endif
 #include "wasm/WasmProcess.h"
+#ifdef __symbian__
+#  include "mozilla/SymbianOS.h"
+#endif
 
 using js::FutexThread;
 using JS::detail::InitState;
@@ -218,14 +221,23 @@ JS_PUBLIC_API bool JS::InitSelfHostedCode(JSContext* cx, SelfHostedCache cache,
   JSRuntime* rt = cx->runtime();
 
   if (!rt->initSelfHostingStencil(cx, cache, writer)) {
+#ifdef __symbian__
+    MozSymbianLog("js InitSelfHostedCode: initSelfHostingStencil failed");
+#endif
     return false;
   }
 
   if (!rt->initializeAtoms(cx)) {
+#ifdef __symbian__
+    MozSymbianLog("js InitSelfHostedCode: initializeAtoms failed");
+#endif
     return false;
   }
 
   if (!rt->initSelfHostingFromStencil(cx)) {
+#ifdef __symbian__
+    MozSymbianLog("js InitSelfHostedCode: initSelfHostingFromStencil failed");
+#endif
     return false;
   }
 

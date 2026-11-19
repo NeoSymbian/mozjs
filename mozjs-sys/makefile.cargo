@@ -88,6 +88,16 @@ ifneq ($(HOST),$(TARGET))
 			$(NULL)
 	endif
 
+	ifeq (armv7a-symbian-eabi,$(TARGET))
+		# NeoSymbian: EKA2 at AArch32 EL0 with P.I.P.S.; build.rs points CC/CXX/AR at the SDK's wrappers
+		# (NEOSYMBIAN_SDK_BIN), which carry ARMv7 + NEON, softfp and the device headers
+		TARGET = arm-unknown-symbian
+		STRIP := $(NEOSYMBIAN_SDK_BIN)/armv7-symbian-strip
+		NM := $(NEOSYMBIAN_SDK_BIN)/armv7-symbian-nm
+		RANLIB := $(NEOSYMBIAN_SDK_BIN)/armv7-symbian-ranlib
+		export STRIP NM RANLIB
+	endif
+
 	ifeq (aarch64-unknown-linux-gnu,$(TARGET))
 	    # Reset TARGET variable because aarch64 target name used by Rust is not
 		# the same as the target name needed for the CXX toolchain.

@@ -60,6 +60,23 @@ fn main() {
     // https://github.com/servo/servo/issues/14759
     env::set_var("MOZ_NO_DEBUG_RTL", "1");
 
+    if let Some(bin) = symbian_sdk_bin() {
+        // NeoSymbian (armv7a-symbian-eabi): the SDK's wrappers (browser tools/symbian-sdk.sh) carry the target's
+        // flags and headers; cc-rs and configure take them as the target's tools
+        for (var, tool) in [
+            ("TARGET_CC", "gcc"),
+            ("TARGET_CXX", "g++"),
+            ("TARGET_AR", "ar"),
+            ("TARGET_READELF", "readelf"),
+            ("TARGET_OBJCOPY", "objcopy"),
+        ] {
+            if env::var_os(var).is_none() {
+                env::set_var(var, bin.join(format!("armv7-symbian-{tool}")));
+            }
+        }
+        env::set_var("NEOSYMBIAN_SDK_BIN", &bin);
+    }
+
     if let Some(path) = wasi_sdk() {
         env::set_var(
             "WASI_SYSROOT",
@@ -418,6 +435,13 @@ fn build_bindings(build_dir: &Path, target: BuildTarget) {
             .clang_arg(env::var("WASI_SYSROOT").unwrap().to_string());
     }
 
+    // NeoSymbian: the wrappers keep the target's flags to themselves; libclang gets them from the SDK
+    if let Some(bin) = symbian_sdk_bin() {
+        let args = fs::read_to_string(bin.join("armv7-symbian-clang-args"))
+            .expect("the SDK's armv7-symbian-clang-args (browser tools/symbian-sdk.sh)");
+        builder = builder.clang_args(args.lines().filter(|l| !l.is_empty()));
+    }
+
     if target == BuildTarget::JSGlue {
         builder = builder
             .parse_callbacks(Box::new(JSGlueCargoCallbacks::default()))
@@ -493,6 +517,8 @@ fn link_static_lib_binaries(build_dir: &Path) {
         println!("cargo:rustc-link-lib=c++");
     } else if target.contains("windows") && target.contains("gnu") {
         println!("cargo:rustc-link-lib=stdc++");
+    } else if target.contains("symbian") {
+        // NeoSymbian: libstdc++ is used header-only; its runtime pieces come with the EXE (browser std/cxxrt)
     } else if !target.contains("windows") && !target.contains("wasi") {
         // The build works without this for WASI, and specifying it means
         // needing to use the WASI-SDK's clang for linking, which is annoying.
@@ -502,6 +528,20 @@ fn link_static_lib_binaries(build_dir: &Path) {
     if target.contains("wasi") {
         println!("cargo:rustc-link-lib=wasi-emulated-getpid");
     }
+}
+
+/// NeoSymbian: the SDK's `bin/` for an armv7a-symbian-eabi build (`NEOSYMBIAN_SDK`, else
+/// `~/.local/share/neosymbian-sdk`).
+fn symbian_sdk_bin() -> Option<PathBuf> {
+    if !env::var("TARGET").unwrap().contains("symbian") {
+        return None;
+    }
+    let sdk = env::var_os("NEOSYMBIAN_SDK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var_os("HOME").expect("HOME")).join(".local/share/neosymbian-sdk")
+        });
+    Some(sdk.join("bin"))
 }
 
 fn link_bindgen_static_lib_binaries(build_dir: &Path) {

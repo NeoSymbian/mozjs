@@ -4,6 +4,10 @@
 
 #include "mozilla/RandomNum.h"
 
+#ifdef __symbian__
+#  include "mozilla/SymbianOS.h"
+#endif
+
 #ifdef XP_UNIX
 #  include <fcntl.h>
 #  include <unistd.h>
@@ -89,6 +93,12 @@ MFBT_API bool GenerateRandomBytesFromOS(void* aBuffer, size_t aLength) {
 
 #if defined(XP_WIN)
   return !!RtlGenRandom(aBuffer, aLength);
+
+#elif defined(__symbian__)
+
+  // NeoSymbian: no /dev/urandom; the kernel's secure generator
+  MozSymbianRandom(aBuffer, aLength);
+  return true;
 
 #elif defined(USE_ARC4RANDOM)  // defined(XP_WIN)
 

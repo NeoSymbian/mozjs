@@ -14,7 +14,7 @@
 #  include <windows.h>
 #elif !defined(__OS2__)
 #  include <unistd.h>
-#  ifndef __wasi__
+#  if !defined(__wasi__) && !defined(__symbian__)
 #    include <sys/mman.h>
 #    ifndef MAP_ANON
 #      ifdef MAP_ANONYMOUS
@@ -102,6 +102,25 @@ static bool ProbeRegion(uintptr_t aRegion, uintptr_t aSize) {
 }
 
 static uintptr_t GetDesiredRegionSize() { return 0; }
+
+#elif defined(__symbian__)
+
+// NeoSymbian: no user call reserves address space by address, but every address from KUserMemoryLimit (0x90000000)
+// up is supervisor-only on EKA2 (kernel/eka/include/memmodel/epoc/flexible/arm64/mmboot.h): the preferred poison
+// address 0xF0DEAFFF always faults from user code.
+#  define RESERVE_FAILED 0
+
+static void* ReserveRegion(uintptr_t aRegion, uintptr_t aSize) {
+  return RESERVE_FAILED;
+}
+
+static void ReleaseRegion(void* aRegion, uintptr_t aSize) {}
+
+static bool ProbeRegion(uintptr_t aRegion, uintptr_t aSize) {
+  return aRegion >= 0x90000000u;
+}
+
+static uintptr_t GetDesiredRegionSize() { return 4096; }
 
 #else  // __wasi__
 

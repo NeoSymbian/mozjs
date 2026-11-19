@@ -64,6 +64,9 @@
 #include "vm/Compression.h"
 #include "vm/DateObject.h"
 #include "vm/ErrorReporting.h"  // js::MaybePrintAndClearPendingException
+#ifdef __symbian__
+#  include "mozilla/SymbianOS.h"
+#endif
 #include "vm/Float16.h"
 #include "vm/FrameIter.h"  // js::ScriptFrameIter
 #include "vm/GeneratorObject.h"
@@ -1975,6 +1978,20 @@ class MOZ_STACK_CLASS AutoPrintSelfHostingFrontendContext
     if (maybeError()) {
       JS::PrintError(stderr, &*maybeError(), true);
     }
+#ifdef __symbian__
+    // NeoSymbian: P.I.P.S.'s stderr does not reach the serial log
+    if (hadOutOfMemory() || hadOverRecursed() || hadAllocationOverflow()) {
+      MozSymbianLog("js self-hosting: out of memory %d, over-recursed %d, "
+                    "allocation overflow %d",
+                    hadOutOfMemory(), hadOverRecursed(),
+                    hadAllocationOverflow());
+    }
+    if (maybeError()) {
+      MozSymbianLog("js self-hosting error: %s:%u: %s",
+                    maybeError()->filename.c_str(), maybeError()->lineno,
+                    maybeError()->message().c_str());
+    }
+#endif
     for (CompileError& error : warnings()) {
       JS::PrintError(stderr, &error, true);
     }

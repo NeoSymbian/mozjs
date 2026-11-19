@@ -13,6 +13,43 @@
 #include <errno.h>
 
 // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+#if defined(__symbian__)
+// NeoSymbian: P.I.P.S. has no pthread_rwlock; the lock is one mutex
+// (PlatformRWLock.h).
+mozilla::detail::RWLockImpl::RWLockImpl() {
+  MOZ_RELEASE_ASSERT(pthread_mutex_init(&mRWLock, nullptr) == 0,
+                     "pthread_mutex_init failed");
+}
+
+mozilla::detail::RWLockImpl::~RWLockImpl() {
+  MOZ_RELEASE_ASSERT(pthread_mutex_destroy(&mRWLock) == 0,
+                     "pthread_mutex_destroy failed");
+}
+
+bool mozilla::detail::RWLockImpl::tryReadLock() {
+  int rv = pthread_mutex_trylock(&mRWLock);
+  MOZ_RELEASE_ASSERT(rv == 0 || rv == EBUSY, "pthread_mutex_trylock failed");
+  return rv == 0;
+}
+
+void mozilla::detail::RWLockImpl::readLock() {
+  MOZ_RELEASE_ASSERT(pthread_mutex_lock(&mRWLock) == 0,
+                     "pthread_mutex_lock failed");
+}
+
+void mozilla::detail::RWLockImpl::readUnlock() {
+  MOZ_RELEASE_ASSERT(pthread_mutex_unlock(&mRWLock) == 0,
+                     "pthread_mutex_unlock failed");
+}
+
+bool mozilla::detail::RWLockImpl::tryWriteLock() { return tryReadLock(); }
+
+void mozilla::detail::RWLockImpl::writeLock() { readLock(); }
+
+void mozilla::detail::RWLockImpl::writeUnlock() { readUnlock(); }
+
+#else
+
 mozilla::detail::RWLockImpl::RWLockImpl() {
   MOZ_RELEASE_ASSERT(pthread_rwlock_init(&mRWLock, nullptr) == 0,
                      "pthread_rwlock_init failed");
@@ -60,3 +97,5 @@ void mozilla::detail::RWLockImpl::writeUnlock() {
   MOZ_RELEASE_ASSERT(pthread_rwlock_unlock(&mRWLock) == 0,
                      "pthread_rwlock_unlock failed");
 }
+
+#endif  // __symbian__

@@ -35,7 +35,9 @@
 #    include <sys/syscall.h>
 #  endif
 
-#  if !defined(__wasi__)
+#  if defined(__symbian__)
+#    include "gc/MemorySymbian.h"
+#  elif !defined(__wasi__)
 #    include <sys/mman.h>
 #    include <sys/resource.h>
 #    include <sys/stat.h>
@@ -174,7 +176,7 @@ enum class PageAccess : DWORD {
   ReadExecute = PAGE_EXECUTE_READ,
   ReadWriteExecute = PAGE_EXECUTE_READWRITE,
 };
-#elif defined(__wasi__)
+#elif defined(__wasi__) || defined(__symbian__)
 enum class PageAccess : int {
   None = 0,
   Read = 0,
@@ -198,7 +200,7 @@ template <bool AlwaysGetNew = true>
 static bool TryToAlignChunk(void** aRegion, void** aRetainedRegion,
                             size_t length, size_t alignment);
 
-#ifndef __wasi__
+#if !defined(__wasi__) && !defined(__symbian__)
 static void* MapAlignedPagesSlow(size_t length, size_t alignment);
 #endif  // wasi
 static void* MapAlignedPagesLastDitch(size_t length, size_t alignment,
@@ -250,6 +252,9 @@ static inline void* MapInternal(void* desired, size_t length) {
   if (region) {
     memset(region, 0, length);
   }
+#elif defined(__symbian__)
+  // NeoSymbian: committed, zeroed pages (no address hints: desired is ignored)
+  region = gc::symbian::MapAligned(length, gc::SystemPageSize());
 #else
   int flags = MAP_PRIVATE | MAP_ANON;
   region = MozTaggedAnonymousMmap(desired, length, int(PageAccess::ReadWrite),
@@ -269,6 +274,8 @@ static inline void UnmapInternal(void* region, size_t length) {
   MOZ_RELEASE_ASSERT(VirtualFree(region, 0, MEM_RELEASE) != 0);
 #elif defined(__wasi__)
   free(region);
+#elif defined(__symbian__)
+  gc::symbian::Unmap(region, length);
 #else
   if (munmap(region, length)) {
     MOZ_RELEASE_ASSERT(errno == ENOMEM);
@@ -579,7 +586,14 @@ void* MapAlignedPages(size_t length, size_t alignment,
     alignment = allocGranularity;
   }
 
-#ifdef __wasi__
+#if defined(__symbian__)
+  // NeoSymbian: aligned pages straight from the chunk (MemorySymbian.cpp)
+  void* region = gc::symbian::MapAligned(length, alignment);
+  if (region) {
+    RecordMemoryAlloc(length);  // UnmapPages records the free
+  }
+  return region;
+#elif defined(__wasi__)
   void* region = nullptr;
   if (int err = posix_memalign(&region, alignment, length)) {
     MOZ_ASSERT(err == ENOMEM);
@@ -761,7 +775,7 @@ static void* MapAlignedPagesRandom(size_t length, size_t alignment) {
 
 #endif  // defined(JS_64BIT)
 
-#ifndef __wasi__
+#if !defined(__wasi__) && !defined(__symbian__)
 static void* MapAlignedPagesSlow(size_t length, size_t alignment) {
   void* alignedRegion = nullptr;
   do {
@@ -998,6 +1012,10 @@ bool MarkPagesUnusedSoft(void* region, size_t length) {
                       DWORD(PageAccess::ReadWrite)) == region;
 #elif defined(__wasi__)
   return 0;
+#elif defined(__symbian__)
+  // NeoSymbian: a decommitted page faults (no soft, still-readable state as
+  // madvise gives), so the soft path declines; MarkPagesUnusedHard decommits
+  return false;
 #else
   int status;
   do {
@@ -1027,6 +1045,8 @@ bool MarkPagesUnusedHard(void* region, size_t length) {
 
 #if defined(XP_WIN)
   return VirtualFree(region, length, MEM_DECOMMIT);
+#elif defined(__symbian__)
+  return gc::symbian::Decommit(region, length);
 #else
   return MarkPagesUnusedSoft(region, length);
 #endif
@@ -1055,6 +1075,8 @@ bool MarkPagesInUseHard(void* region, size_t length) {
 #if defined(XP_WIN)
   return VirtualAlloc(region, length, MEM_COMMIT,
                       DWORD(PageAccess::ReadWrite)) == region;
+#elif defined(__symbian__)
+  return gc::symbian::Commit(region, length);
 #else
   return true;
 #endif
@@ -1067,8 +1089,8 @@ size_t GetPageFaultCount() {
     return 0;
   }
   return pmc.PageFaultCount;
-#elif defined(__wasi__)
-  return 0;
+#elif defined(__wasi__) || defined(__symbian__)
+  return 0;  // NeoSymbian: EKA2 gives user code no page-fault count
 #else
   struct rusage usage;
   int err = getrusage(RUSAGE_SELF, &usage);

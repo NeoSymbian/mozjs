@@ -8877,6 +8877,9 @@ static bool SetTimeZone(JSContext* cx, unsigned argc, Value* vp) {
   auto unsetTimeZone = []() {
 #  if defined(_WIN32)
     return _putenv_s("TZ", "") == 0;
+#  elif defined(__symbian__)
+    unsetenv("TZ");  // NeoSymbian: P.I.P.S.'s unsetenv returns nothing
+    return true;
 #  else
     return unsetenv("TZ") == 0;
 #  endif /* _WIN32 */

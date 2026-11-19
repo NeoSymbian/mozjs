@@ -25,7 +25,13 @@ static const long NanoSecPerSec = 1000000000;
 #ifdef CV_USE_CLOCK_API
 // The C++ specification defines std::condition_variable::wait_for in terms of
 // std::chrono::steady_clock, which is closest to CLOCK_MONOTONIC.
+#  ifdef __symbian__
+// NeoSymbian: P.I.P.S. has no pthread_condattr_setclock; its condvars time out
+// against CLOCK_REALTIME (as Rust's std on this target).
+static const clockid_t WhichClock = CLOCK_REALTIME;
+#  else
 static const clockid_t WhichClock = CLOCK_MONOTONIC;
+#  endif
 
 // While timevaladd is widely available to work with timevals, the newer
 // timespec structure is largely lacking such conveniences. Thankfully, the
@@ -59,8 +65,10 @@ mozilla::detail::ConditionVariableImpl::ConditionVariableImpl() {
   int r0 = pthread_condattr_init(&attr);
   MOZ_RELEASE_ASSERT(!r0);
 
+#  ifndef __symbian__
   int r1 = pthread_condattr_setclock(&attr, WhichClock);
   MOZ_RELEASE_ASSERT(!r1);
+#  endif
 
   int r2 = pthread_cond_init(&mCond, &attr);
   MOZ_RELEASE_ASSERT(!r2);

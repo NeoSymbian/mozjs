@@ -62,5 +62,9 @@ SOURCES += [
     "StoreBuffer.cpp",
 ]
 
+if CONFIG["OS_ARCH"] == "Symbian":
+    # NeoSymbian: the GC's pages from a disconnected EKA2 chunk (the e32 headers stay in this file)
+    SOURCES += ["MemorySymbian.cpp"]
+
 if CONFIG["FUZZING_JS_FUZZILLI"]:
     include("/tools/fuzzing/libfuzzer-config.mozbuild")
