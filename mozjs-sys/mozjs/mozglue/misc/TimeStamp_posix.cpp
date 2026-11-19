@@ -11,7 +11,9 @@
 // obtained with this API; see TimeDuration::Resolution;
 //
 
-#include <sys/syscall.h>
+#if !defined(__symbian__)  // NeoSymbian: no syscall(); used by the Linux code only
+#  include <sys/syscall.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 #include <string.h>

@@ -16,7 +16,7 @@
 #include <algorithm>  // std::max, std::min
 #include <memory>     // std::uninitialized_copy_n
 #include <string.h>
-#if !defined(XP_WIN) && !defined(__wasi__)
+#if !defined(XP_WIN) && !defined(__wasi__) && !defined(__symbian__)
 #  include <sys/mman.h>
 #endif
 #include <tuple>  // std::tuple
@@ -212,6 +212,13 @@ void* js::MapBufferMemory(wasm::AddressType t, wasm::PageSize pageSize,
   }
   MOZ_ASSERT(data);
   memset(data, 0, mappedSize);
+#elif defined(__symbian__)
+  // NeoSymbian: committed, zeroed pages from the GC's chunk, as WASI's
+  // posix_memalign (all committed up front)
+  void* data = gc::MapAlignedPages(mappedSize, gc::SystemPageSize());
+  if (!data) {
+    return nullptr;
+  }
 #else   // !XP_WIN && !__wasi__
   void* data =
       MozTaggedAnonymousMmap(nullptr, mappedSize, PROT_NONE,
@@ -248,7 +255,7 @@ bool js::CommitBufferMemory(void* dataEnd, size_t delta) {
   if (!VirtualAlloc(dataEnd, delta, MEM_COMMIT, PAGE_READWRITE)) {
     return false;
   }
-#elif defined(__wasi__)
+#elif defined(__wasi__) || defined(__symbian__)
   // posix_memalign'd memory is already committed
   return true;
 #else
@@ -277,6 +284,9 @@ void js::UnmapBufferMemory(wasm::AddressType t, void* base, size_t mappedSize,
   gc::RecordMemoryFree(committedSize);
 #elif defined(__wasi__)
   free(base);
+  (void)committedSize;
+#elif defined(__symbian__)
+  gc::UnmapPages(base, mappedSize);
   (void)committedSize;
 #else
   munmap(base, mappedSize);
@@ -1598,7 +1608,7 @@ void WasmArrayRawBuffer::discard(size_t byteOffset, size_t byteLen) {
   if (!VirtualAlloc(addr, byteLen, MEM_COMMIT, PAGE_READWRITE)) {
     MOZ_CRASH("wasm discard: decommitted memory but failed to recommit");
   };
-#elif defined(__wasi__)
+#elif defined(__wasi__) || defined(__symbian__)
   memset(addr, 0, byteLen);
 #else  // !XP_WIN
   void* data = MozTaggedAnonymousMmap(addr, byteLen, PROT_READ | PROT_WRITE,

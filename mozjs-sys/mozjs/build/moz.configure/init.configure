@@ -529,6 +529,9 @@ def split_triplet(triplet, allow_wasi=False):
         canonical_os = canonical_kernel = "SunOS"
     elif os.startswith("wasi") and allow_wasi:
         canonical_os = canonical_kernel = "WASI"
+    elif os.startswith("symbian"):
+        # NeoSymbian: EKA2 at AArch32 EL0, P.I.P.S. (Open C) for POSIX; armv7a-symbian-eabi in Rust
+        canonical_os = canonical_kernel = "Symbian"
     else:
         raise ValueError("Unknown OS: %s" % os)
 

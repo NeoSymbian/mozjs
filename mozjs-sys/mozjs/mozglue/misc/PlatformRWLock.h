@@ -34,7 +34,11 @@ class RWLockImpl {
   void operator=(RWLockImpl&&) = delete;
   bool operator==(const RWLockImpl& rhs) = delete;
 
-#ifndef XP_WIN
+#if defined(__symbian__)
+  // NeoSymbian's P.I.P.S. has no pthread_rwlock: a mutex (readers exclude
+  // each other too; correct, less concurrent)
+  pthread_mutex_t mRWLock;
+#elif !defined(XP_WIN)
   pthread_rwlock_t mRWLock;
 #else
   // SRWLock is pointer-sized. We declare it in such a fashion here to avoid

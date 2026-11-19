@@ -9,6 +9,12 @@
 MOZ_MEMORY_API void* memalign(size_t aAlignment, size_t aSize) {
 #  ifdef XP_WIN
   return _aligned_malloc(aSize, aAlignment);
+#  elif defined(__symbian__)
+  // NeoSymbian: P.I.P.S. has no memalign, and its free (User::Free) cannot
+  // take a pointer into a cell, so only malloc's own 8-byte alignment is
+  // offered. The GC's pages and the mapped ArrayBuffers come from
+  // gc/MemorySymbian.cpp instead.
+  return aAlignment <= 8 ? malloc(aSize) : nullptr;
 #  else
   void* ret;
   if (posix_memalign(&ret, aAlignment, aSize) != 0) {
