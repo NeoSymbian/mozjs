@@ -12,6 +12,9 @@
         __attribute__((__format__(os_log, 5, 6))) __attribute__((visibility("default")));
   }
 #endif
+#ifdef __symbian__
+#  include "mozilla/SymbianOS.h"
+#endif
 #ifdef MOZ_WIDGET_ANDROID
 #  include "APKOpen.h"
 #  include "dlfcn.h"
@@ -28,6 +31,9 @@ void mozalloc_abort(const char* const msg) {
 #elif defined(XP_OHOS)
     (void) OH_LOG_Print(0 /* LOG_APP */, 7 /* LOG_FATAL */, OHOS_LOG_DOMAIN, "Gecko",
          "mozalloc_abort: %{public}s\n", msg);
+#elif defined(__symbian__)
+  // NeoSymbian: stderr does not reach the serial log; say why, and who called
+  MozSymbianLog("mozalloc_abort: %s (from %p)", msg, __builtin_return_address(0));
 #else
   fputs(msg, stderr);
   fputs("\n", stderr);
@@ -90,6 +96,9 @@ extern "C" void abort(void) {
   fillAbortMessage(msg, uintptr_t(__builtin_return_address(0)));
 #  else
   const char* const msg = "Redirecting call to abort() to mozalloc_abort\n";
+#  endif
+#  ifdef __symbian__
+  MozSymbianLog("abort() called from %p", __builtin_return_address(0));
 #  endif
 
   mozalloc_abort(msg);
