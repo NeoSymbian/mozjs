@@ -92,9 +92,9 @@ ifneq ($(HOST),$(TARGET))
 		# NeoSymbian (armv8a-symbian-eabi; armv7a before US4): EKA2 at AArch32 EL0 with P.I.P.S.; build.rs points
 		# CC/CXX/AR at the SDK's wrappers (NEOSYMBIAN_SDK_BIN), which carry the CPU flags, softfp and the device headers
 		TARGET = arm-unknown-symbian
-		STRIP := $(NEOSYMBIAN_SDK_BIN)/armv7-symbian-strip
-		NM := $(NEOSYMBIAN_SDK_BIN)/armv7-symbian-nm
-		RANLIB := $(NEOSYMBIAN_SDK_BIN)/armv7-symbian-ranlib
+		STRIP := $(NEOSYMBIAN_SDK_BIN)/armv8-symbian-strip
+		NM := $(NEOSYMBIAN_SDK_BIN)/armv8-symbian-nm
+		RANLIB := $(NEOSYMBIAN_SDK_BIN)/armv8-symbian-ranlib
 		export STRIP NM RANLIB
 	endif
 
