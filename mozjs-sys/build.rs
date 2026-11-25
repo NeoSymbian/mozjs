@@ -71,7 +71,7 @@ fn main() {
             ("TARGET_OBJCOPY", "objcopy"),
         ] {
             if env::var_os(var).is_none() {
-                env::set_var(var, bin.join(format!("armv7-symbian-{tool}")));
+                env::set_var(var, bin.join(format!("armv8-symbian-{tool}")));
             }
         }
         env::set_var("NEOSYMBIAN_SDK_BIN", &bin);
@@ -437,8 +437,8 @@ fn build_bindings(build_dir: &Path, target: BuildTarget) {
 
     // NeoSymbian: the wrappers keep the target's flags to themselves; libclang gets them from the SDK
     if let Some(bin) = symbian_sdk_bin() {
-        let args = fs::read_to_string(bin.join("armv7-symbian-clang-args"))
-            .expect("the SDK's armv7-symbian-clang-args (browser tools/symbian-sdk.sh)");
+        let args = fs::read_to_string(bin.join("armv8-symbian-clang-args"))
+            .expect("the SDK's armv8-symbian-clang-args (browser tools/symbian-sdk.sh)");
         builder = builder.clang_args(args.lines().filter(|l| !l.is_empty()));
     }
 
