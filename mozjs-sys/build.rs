@@ -61,7 +61,7 @@ fn main() {
     env::set_var("MOZ_NO_DEBUG_RTL", "1");
 
     if let Some(bin) = symbian_sdk_bin() {
-        // NeoSymbian (armv7a-symbian-eabi): the SDK's wrappers (browser tools/symbian-sdk.sh) carry the target's
+        // NeoSymbian (armv8a-symbian-eabi): the SDK's wrappers (browser tools/symbian-sdk.sh) carry the target's
         // flags and headers; cc-rs and configure take them as the target's tools
         for (var, tool) in [
             ("TARGET_CC", "gcc"),
@@ -530,7 +530,7 @@ fn link_static_lib_binaries(build_dir: &Path) {
     }
 }
 
-/// NeoSymbian: the SDK's `bin/` for an armv7a-symbian-eabi build (`NEOSYMBIAN_SDK`, else
+/// NeoSymbian: the SDK's `bin/` for a *-symbian-eabi build (`NEOSYMBIAN_SDK`, else
 /// `~/.local/share/neosymbian-sdk`).
 fn symbian_sdk_bin() -> Option<PathBuf> {
     if !env::var("TARGET").unwrap().contains("symbian") {
